@@ -431,6 +431,11 @@ export class CoreBankInfraStack extends cdk.Stack {
             'Allow all traffic from VSCode IDE security group'
         );
 
+	// VSCode에서 RDS 접근 허용
+        this.rdsClusters.forEach(cluster => {
+            cluster.connections.allowDefaultPortFrom(vscodeSecurityGroup, 'Allow VSCode EC2 to connect to RDS');
+        });
+
         // (선택사항) 보안 그룹 ID를 출력값으로 추가 - 디버깅용
         new cdk.CfnOutput(this, 'VSCodeSecurityGroupId', {
             value: vscodeSecurityGroup.securityGroupId,
