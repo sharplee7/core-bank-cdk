@@ -73,6 +73,17 @@ export class CoreBankInfraStack extends cdk.Stack {
                         'delete.topic.enable=true\n'
                 }).attrArn,
                 revision: 1
+            },
+            clientAuthentication: {
+                unauthenticated: {
+                    enabled: true
+                }
+            },
+            encryptionInfo: {
+                encryptionInTransit: {
+                    clientBroker: 'PLAINTEXT',
+                    inCluster: true
+                }
             }
         });
 
