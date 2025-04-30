@@ -124,7 +124,8 @@ export class CoreBankInfraStack extends cdk.Stack {
                 // 클러스터에 username, password 사용
                 //credentials: rds.Credentials.fromSecret(this.secret),
                 credentials: rds.Credentials.fromUsername('postgres', {
-                    password: cdk.SecretValue.unsafePlainText('postgres1234!'),
+                    // password: cdk.SecretValue.unsafePlainText('postgres1234!'),
+                    password: cdk.SecretValue.unsafePlainText('admin1234'),
                 }),
         
                 vpc: this.vpc, 
