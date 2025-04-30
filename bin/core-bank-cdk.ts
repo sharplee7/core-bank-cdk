@@ -46,6 +46,13 @@ export class CoreBankInfraStack extends cdk.Stack {
         this.vpc.addGatewayEndpoint('S3Endpoint', { service: ec2.GatewayVpcEndpointAwsService.S3 });
         this.vpc.addGatewayEndpoint('DynamoDBEndpoint', { service: ec2.GatewayVpcEndpointAwsService.DYNAMODB });
 
+        // MSK 보안 그룹 생성
+        const mskSecurityGroup = new ec2.SecurityGroup(this, 'MskSecurityGroup', {
+            vpc: this.vpc,
+            allowAllOutbound: true,
+            description: 'Security group for MSK cluster'
+        });
+
         // MSK Cluster
         this.kafkaCluster = new msk.CfnCluster(this, 'KafkaCluster', {
             clusterName: 'composable-bank-kafka-cluster',
@@ -55,6 +62,7 @@ export class CoreBankInfraStack extends cdk.Stack {
                 instanceType: 'kafka.m5.large',
                 clientSubnets: this.vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
                 storageInfo: { ebsStorageInfo: { volumeSize: 1000 } },
+                securityGroups: [mskSecurityGroup.securityGroupId],
             },
 
         });
@@ -98,6 +106,7 @@ export class CoreBankInfraStack extends cdk.Stack {
                 "AmazonEKSWorkerNodePolicy",
                 "AmazonEC2ContainerRegistryReadOnly",
                 "AmazonEKS_CNI_Policy",
+                "AmazonDynamoDBFullAccess",
               ].map((policy) => iam.ManagedPolicy.fromAwsManagedPolicyName(policy)),
             }),
           }
@@ -281,18 +290,6 @@ export class CoreBankInfraStack extends cdk.Stack {
             ]
         });
 
-        // EC2 인스턴스 생성
-        // this.ec2Instance = new ec2.Instance(this, 'CoreBankEc2Instance', {
-        //     vpc: this.vpc,
-        //     instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.XLARGE),
-        //     machineImage: ec2.MachineImage.genericLinux({
-        //         'ap-northeast-2': 'ami-08d803b9d3be267c0' // 공개된 AMI ID 입력
-        //     }),
-        //     securityGroup: securityGroup,
-        //     vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
-        //     role: ec2Role
-        // });
-
         /////////////////////////////////
         // 추가 개발영역
         /////////////////////////////////
@@ -438,183 +435,75 @@ export class CoreBankInfraStack extends cdk.Stack {
             cluster.connections.allowDefaultPortFrom(this.eksCluster.clusterSecurityGroup, 'Allow EKS cluster to connect RDS')
         });
 
+        // EKS 클러스터의 보안 그룹에서 MSK로의 접근 허용
+        // Kafka 기본 포트: 9092(일반), 9094(TLS), 9096(IAM), 2181(ZooKeeper)
+        mskSecurityGroup.addIngressRule(
+            this.eksCluster.clusterSecurityGroup, 
+            ec2.Port.tcp(9092), 
+            'Allow EKS to access MSK (plaintext)'
+        );
+
+        mskSecurityGroup.addIngressRule(
+            this.eksCluster.clusterSecurityGroup, 
+            ec2.Port.tcp(9094), 
+            'Allow EKS to access MSK (TLS)'
+        );
+
+        mskSecurityGroup.addIngressRule(
+            this.eksCluster.clusterSecurityGroup, 
+            ec2.Port.tcp(9096), 
+            'Allow EKS to access MSK (IAM)'
+        );
+
+        mskSecurityGroup.addIngressRule(
+            this.eksCluster.clusterSecurityGroup, 
+            ec2.Port.tcp(2181), 
+            'Allow EKS to access ZooKeeper'
+        );
+
+        // VSCode IDE에서도 MSK에 접근할 수 있도록 설정
+        mskSecurityGroup.addIngressRule(
+            vscodeSecurityGroup, 
+            ec2.Port.tcp(9092), 
+            'Allow VSCode IDE to access MSK (plaintext)'
+        );
+        
+        mskSecurityGroup.addIngressRule(
+            vscodeSecurityGroup, 
+            ec2.Port.tcp(9094), 
+            'Allow VSCode IDE to access MSK (TLS)'
+        );
+        
+        mskSecurityGroup.addIngressRule(
+            vscodeSecurityGroup, 
+            ec2.Port.tcp(9096), 
+            'Allow VSCode IDE to access MSK (IAM)'
+        );
+        
+        mskSecurityGroup.addIngressRule(
+            vscodeSecurityGroup, 
+            ec2.Port.tcp(2181), 
+            'Allow VSCode IDE to access ZooKeeper'
+        );
+
         // (선택사항) 보안 그룹 ID를 출력값으로 추가 - 디버깅용
         new cdk.CfnOutput(this, 'VSCodeSecurityGroupId', {
             value: vscodeSecurityGroup.securityGroupId,
             description: 'Security Group ID of VSCode IDE'
         });
 
-        ////////////////////////////////////////////////////////
-        // 프론트엔드 EC2 생성
-        ////////////////////////////////////////////////////////
-
-//         // EC2 인스턴스 생성을 위한 사용자 데이터 스크립트를 준비하는 함수
-//         const getFrontendUserdata = (ingressHostname: string) => {
-//             const userData = ec2.UserData.forLinux();
-//             userData.addCommands(`
-// #!/bin/bash
-
-// # Log 파일 설정
-// LOGFILE="/var/log/modernbank-setup.log"
-// exec > >(tee -a \${LOGFILE}) 2>&1
-
-// # 시스템 업데이트
-// echo "Updating system packages..."
-// yum update -y
-
-// # Git 설치
-// echo "Installing Git..."
-// yum install -y git
-
-// # Node.js 20 설치
-// echo "Installing Node.js 20..."
-// curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-// yum install -y nodejs
-
-// # Node.js 버전 확인
-// echo "Node.js version:"
-// node --version
-// echo "npm version:"
-// npm --version
-
-// # 앱 디렉토리 생성
-// GIT_DIR="/opt/modernbank-demo"
-// APP_DIR="/opt/modenbank-demo/modernbank-ui"
-// echo "Creating application directory: \${APP_DIR}"
-// mkdir -p \${GIT_DIR}
-// mkdir -p \${APP_DIR}
-
-// # Git 리포지토리에서 코드 클론
-// echo "Cloning the repository..."
-// REPO_URL="https://github.com/sharplee7/modernbank-demo"
-// BRANCH_NAME="V2.0-Add-Compensation"
-// git clone \${REPO_URL} \${GIT_DIR} --branch \${BRANCH_NAME} --single-branch
-
-// # 앱 디렉토리로 이동
-// cd \${APP_DIR}
-
-// # 의존성 패키지 설치
-// echo "Installing dependencies..."
-// npm ci
-
-// # 환경 변수 파일 생성 (필요한 경우)
-// echo "Creating .env.production file..."
-// cat > .env.production << EOL
-// # 공통 API 기본 URL
-// NEXT_PUBLIC_API_BASE_URL="${ingressHostname}"
-
-// # 서비스별 엔드포인트
-// NEXT_PUBLIC_AUTH=\\\${NEXT_PUBLIC_API_BASE_URL}/user
-// NEXT_PUBLIC_CUSTOMER=\\\${NEXT_PUBLIC_API_BASE_URL}/customer
-// NEXT_PUBLIC_TRANSFER=\\\${NEXT_PUBLIC_API_BASE_URL}/transfer
-// NEXT_PUBLIC_ACCOUNT=\\\${NEXT_PUBLIC_API_BASE_URL}/account
-// NEXT_PUBLIC_CQRS=\\\${NEXT_PUBLIC_API_BASE_URL}/cqrs
-// NEXT_PUBLIC_PRODUCT=\\\${NEXT_PUBLIC_API_BASE_URL}/product
-// EOL
-
-// # 앱 빌드
-// echo "Building Next.js application..."
-// npm run build
-
-// # systemd 서비스 파일 생성
-// echo "Creating systemd service..."
-// cat > /etc/systemd/system/modernbank-ui.service << EOL
-// [Unit]
-// Description=ModernBank UI Next.js Application
-// After=network.target
-
-// [Service]
-// Type=simple
-// User=ec2-user
-// WorkingDirectory=\${APP_DIR}
-// ExecStart=/usr/bin/npm start
-// Restart=on-failure
-// Environment=NODE_ENV=production
-// Environment=PORT=3000
-
-// [Install]
-// WantedBy=multi-user.target
-// EOL
-
-// # systemd 서비스 활성화 및 시작
-// echo "Enabling and starting systemd service..."
-// systemctl daemon-reload
-// systemctl enable modernbank-ui.service
-// systemctl start modernbank-ui.service
-
-// # 서비스 상태 확인
-// echo "Service status:"
-// systemctl status modernbank-ui.service
-//             `);
-//             return userData;
-//         }
+                
+        // MSK 보안 그룹 ID 출력
+        new cdk.CfnOutput(this, 'MSKSecurityGroupId', {
+            value: mskSecurityGroup.securityGroupId,
+            description: 'Security Group ID of MSK Cluster'
+        });
         
-//         // VSCode IDE에서 실행할 명령어를 통해 값을 얻어오는 커스텀 리소스
-//         const getIngressHostname = new cr.AwsCustomResource(this, 'GetIngressHostname', {
-//             onCreate: {
-//               service: 'SSM',
-//               action: 'sendCommand',
-//               parameters: {
-//                 InstanceIds: [this.vscodeIde.ec2Instance.instanceId],
-//                 DocumentName: 'AWS-RunShellScript',
-//                 Parameters: {
-//                   commands: [
-//                     'sudo -u ec2-user kubectl get ingress -n modernbank -o jsonpath=\'{.items[].status.loadBalancer.ingress[].hostname}\''
-//                   ]
-//                 }
-//               },
-//               physicalResourceId: cr.PhysicalResourceId.of('IngressHostnameCommand')
-//             },
-//             policy: cr.AwsCustomResourcePolicy.fromStatements([
-//               new iam.PolicyStatement({
-//                 actions: [
-//                   'ssm:SendCommand',
-//                   'ssm:GetCommandInvocation'
-//                 ],
-//                 resources: ['*']
-//               })
-//             ])
-//         });
-
-//         getIngressHostname.node.addDependency(this.vscodeIde);
-//         getIngressHostname.node.addDependency(this.eksCluster);
-//         getIngressHostname.node.addDependency(albController);
-          
-//         // 인그레스 호스트네임을 CloudFormation 출력으로 추가
-//         new cdk.CfnOutput(this, 'IngressHostname', {
-//             value: getIngressHostname.getResponseField('StandardOutputContent'),  // SSM SendCommand의 출력 경로
-//             description: 'Ingress Hostname from kubectl command',
-//             exportName: 'ModernBankIngressHostname'  // 다른 스택에서 참조할 수 있도록 export (선택사항)
-//         });
-
-        
-//         // T3.small EC2 인스턴스 생성
-//         const frontendEc2Instance = new ec2.Instance(this, 'FrontendEC2Instance', {
-//             vpc: this.vpc,
-//             instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.SMALL),
-//             machineImage: ec2.MachineImage.latestAmazonLinux2(),
-//             userData: getFrontendUserdata(getIngressHostname.getResponseField('StandardOutputContent')),
-//             vpcSubnets: {
-//                 subnetType: ec2.SubnetType.PUBLIC // 또는 필요에 따라 PRIVATE 선택
-//             },
-//             associatePublicIpAddress: true,
-//             // 필요한 보안 그룹 설정
-//             securityGroup: new ec2.SecurityGroup(this, 'FrontendEC2SecurityGroup', {
-//                 vpc: this.vpc,
-//                 allowAllOutbound: true,
-//                 description: 'Security group for frontend EC2 instance'
-//             })
-//         });
-
-//         //print frontendEc2Instance's public ip address
-//         new cdk.CfnOutput(this, 'FrontendEC2InstancePublicIp', {
-//             value: `frontendEc2Instance.instancePublicIp`,
-//             description: 'Public IP of frontend EC2 instance'
-//         });
-//         new cdk.CfnOutput(this, 'FrontendEC2InstancePublicAddress', {
-//             value: `http://${frontendEc2Instance.instancePublicIp}:3000`,
-//             description: 'Public IP of frontend EC2 instance'
-//         });
+        // EKS 보안 그룹 ID 출력
+        new cdk.CfnOutput(this, 'EKSSecurityGroupId', {
+            value: this.eksCluster.clusterSecurityGroup.securityGroupId,
+            description: 'Security Group ID of EKS Cluster'
+        });
         
     }
 }
