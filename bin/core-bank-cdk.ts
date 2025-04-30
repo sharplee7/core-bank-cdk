@@ -57,7 +57,7 @@ export class CoreBankInfraStack extends cdk.Stack {
         this.kafkaCluster = new msk.CfnCluster(this, 'KafkaCluster', {
             clusterName: 'composable-bank-kafka-cluster',
             kafkaVersion: '3.6.0',
-            numberOfBrokerNodes: 3,
+            numberOfBrokerNodes: 4,
             brokerNodeGroupInfo: {
                 instanceType: 'kafka.m5.large',
                 clientSubnets: this.vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
