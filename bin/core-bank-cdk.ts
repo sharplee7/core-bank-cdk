@@ -64,7 +64,16 @@ export class CoreBankInfraStack extends cdk.Stack {
                 storageInfo: { ebsStorageInfo: { volumeSize: 1000 } },
                 securityGroups: [mskSecurityGroup.securityGroupId],
             },
-
+            configurationInfo: {
+                arn: new msk.CfnConfiguration(this, 'KafkaConfiguration', {
+                    name: 'composable-bank-kafka-config',
+                    kafkaVersionsList: ['3.6.0'],
+                    serverProperties: 
+                        'auto.create.topics.enable=true\n' +
+                        'delete.topic.enable=true\n'
+                }).attrArn,
+                revision: 1
+            }
         });
 
 
