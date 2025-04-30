@@ -214,6 +214,10 @@ export class CoreBankInfraStack extends cdk.Stack {
             'CoreBankEksOIDCProvider',
             `arn:aws:iam::${this.account}:oidc-provider/${this.eksCluster.clusterOpenIdConnectIssuerUrl.substring(8)}`
         );
+        //XXX 위의 clusterOpenIdConnectIssuerUrl 값은 생성 후 동적으로 가져와야 하는 값이므로 
+        // 위와 같이 할 경우 ${Token[TOKEN.1234]} 의 substring(8)을 처리하게 되서 TOKEN.1234]} 로 변경이 되버린다.
+        // CDK에서 이 부분을 동적으로 처리할 수는 있으나, 아래의 trusted relationship에서 key값을 cdk 동적 값으로 처리하는게 안되므로
+        // 우선은 클러스터 생성 후 별도 사용자 스크립트로 해결하게 한다. 
 
         
         // Pod용 IAM Role 생성
