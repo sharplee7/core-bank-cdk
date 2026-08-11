@@ -10,7 +10,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cr from 'aws-cdk-lib/custom-resources'
-import { KubectlV32Layer as KubectlLayer } from "@aws-cdk/lambda-layer-kubectl-v32"
+import { KubectlV34Layer as KubectlLayer } from "@aws-cdk/lambda-layer-kubectl-v34"
 import { VSCodeIde } from "@workshop-cdk-constructs/vscode-ide"
 import { Identity } from 'aws-cdk-lib/aws-ses';
 //import * as serverlessrepo from 'aws-cdk-lib/aws-serverlessrepo';
@@ -56,7 +56,11 @@ export class CoreBankInfraStack extends cdk.Stack {
         // MSK Cluster
         this.kafkaCluster = new msk.CfnCluster(this, 'KafkaCluster', {
             clusterName: 'composable-bank-kafka-cluster',
-            kafkaVersion: '3.6.0',
+            // Kafka 3.6.0은 2026-06-01 지원 종료(신규 생성 불가). 3.9.x는 ZooKeeper/KRaft를
+            // 모두 지원하는 마지막 버전이며 릴리스 후 최소 2년간 확장 지원된다.
+            // 인증(unauthenticated)/암호화(PLAINTEXT)/serverProperties는 modernbank 앱이
+            // 9092 PLAINTEXT + 토픽 자동생성에 의존하므로 절대 변경하지 말 것.
+            kafkaVersion: '3.9.x',
             numberOfBrokerNodes: 4,
             brokerNodeGroupInfo: {
                 instanceType: 'kafka.m5.large',
@@ -67,7 +71,7 @@ export class CoreBankInfraStack extends cdk.Stack {
             configurationInfo: {
                 arn: new msk.CfnConfiguration(this, 'KafkaConfiguration', {
                     name: 'composable-bank-kafka-config',
-                    kafkaVersionsList: ['3.6.0'],
+                    kafkaVersionsList: ['3.9.x'],
                     serverProperties: 
                         'auto.create.topics.enable=true\n' +
                         'delete.topic.enable=true\n'
@@ -100,7 +104,9 @@ export class CoreBankInfraStack extends cdk.Stack {
         this.eksCluster = new eks.Cluster(this, 'CoreBankEKSCluster', {
             vpc: this.vpc,
             defaultCapacity: 0, // 기본 용량을 0으로 설정하여 관리형 노드 그룹을 수동으로 추가
-            version: eks.KubernetesVersion.V1_32,
+            // 1.32는 2026-03-23에 표준 지원이 종료되어 확장 지원(시간당 추가 과금) 구간이다.
+            // kubectlLayer는 클러스터 버전과 맞춰야 한다(v34 <-> V1_34).
+            version: eks.KubernetesVersion.V1_34,
             kubectlLayer: new KubectlLayer(this, "kubectl"),
             ipFamily: eks.IpFamily.IP_V4,
             clusterLogging: clusterLogging,
@@ -114,7 +120,9 @@ export class CoreBankInfraStack extends cdk.Stack {
     
         this.eksCluster.addNodegroupCapacity("custom-node-group", {
             amiType: eks.NodegroupAmiType.AL2023_X86_64_STANDARD,
-            instanceTypes: [new ec2.InstanceType('t3.medium')],
+            // modernbank 서비스 6개(512Mi/250m) + kube-system + ALB 컨트롤러를 t3.medium 2대에
+            // 올리면 여유가 거의 없다. t3.large로 상향(컨테이너 이미지가 x86이므로 Graviton 금지).
+            instanceTypes: [new ec2.InstanceType('t3.large')],
             desiredSize: 2,
             minSize: 2,
             maxSize: 5,
@@ -148,7 +156,13 @@ export class CoreBankInfraStack extends cdk.Stack {
         dbNames.forEach((dbName, index) => {
   
             const dbCluster = new rds.DatabaseCluster(this, `${dbName}`, { // 고유한 ID 사용
-                engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.VER_14_13 }),
+                // 14.13은 2026-05-31에 Aurora 표준 지원이 종료되어 신규 생성이 불가하다.
+                // 메이저 14를 유지하는 이유:
+                //  - Aurora PG 17 이상은 rds.force_ssl 기본값이 1(on)이라
+                //    modernbank_user(Go, sslmode=disable)가 접속 실패한다.
+                //  - db.r7g.large는 Aurora PG 14.7 이상을 요구하므로 14.6(LTS)은 쓸 수 없다.
+                // => 14 계열 최신인 14.22 사용 (PG14 메이저 표준 지원은 2027-02-28까지)
+                engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.VER_14_22 }),
         
                 // 클러스터에 username, password 사용
                 //credentials: rds.Credentials.fromSecret(this.secret),
@@ -208,30 +222,29 @@ export class CoreBankInfraStack extends cdk.Stack {
         //     clientIds: ['sts.amazonaws.com'],
         // });
         
-        // EKS 클러스터의 기존 OIDC provider 사용
-        const openIdConnectProvider = iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(
-            this,
-            'CoreBankEksOIDCProvider',
-            `arn:aws:iam::${this.account}:oidc-provider/${this.eksCluster.clusterOpenIdConnectIssuerUrl.substring(8)}`
-        );
-        //XXX 위의 clusterOpenIdConnectIssuerUrl 값은 생성 후 동적으로 가져와야 하는 값이므로 
-        // 위와 같이 할 경우 ${Token[TOKEN.1234]} 의 substring(8)을 처리하게 되서 TOKEN.1234]} 로 변경이 되버린다.
-        // CDK에서 이 부분을 동적으로 처리할 수는 있으나, 아래의 trusted relationship에서 key값을 cdk 동적 값으로 처리하는게 안되므로
-        // 우선은 클러스터 생성 후 별도 사용자 스크립트로 해결하게 한다. 
+        // EKS 클러스터가 관리하는 OIDC provider를 그대로 사용한다.
+        // (ALB 컨트롤러도 같은 provider를 쓰므로 중복 생성/EntityAlreadyExists가 발생하지 않는다)
+        const openIdConnectProvider = this.eksCluster.openIdConnectProvider;
+        const oidcIssuer = openIdConnectProvider.openIdConnectProviderIssuer;
 
-        
-        // Pod용 IAM Role 생성
+        // [수정 이력] 기존에는 clusterOpenIdConnectIssuerUrl.substring(8)로 issuer를 잘라 썼는데,
+        // 이 값은 배포 시점에 결정되는 CDK 토큰("${Token[TOKEN.1234]}")이라 문자열을 자르면
+        // "TOKEN.1234]}" 로 훼손된다. 그 결과 신뢰 정책의 Principal ARN과 조건 키가 모두 깨져
+        // IAM CreateRole이 MalformedPolicyDocument로 실패했다.
+        // 조건 키(key)에 토큰이 들어가야 하므로 CfnJson으로 감싼다(CDK ServiceAccount와 동일 패턴).
+        const podRoleConditions = new cdk.CfnJson(this, 'CoreBankPodRoleConditionJson', {
+            value: {
+                [`${oidcIssuer}:aud`]: 'sts.amazonaws.com',
+                [`${oidcIssuer}:sub`]: 'system:serviceaccount:modernbank:modernbank-*-sa',
+            },
+        });
+
+        // Pod용 IAM Role 생성 (IRSA)
         const podRole = new iam.Role(this, 'CoreBankPodRole', {
             roleName: 'modernbank-service-role',
-            assumedBy: new iam.FederatedPrincipal(
-            openIdConnectProvider.openIdConnectProviderArn,
-            {
-                StringLike: {
-                [`${this.eksCluster.clusterOpenIdConnectIssuerUrl.substring(8)}:sub`]: "system:serviceaccount:modernbank:modernbank-*-sa"
-                },
-            },
-            "sts:AssumeRoleWithWebIdentity"
-            ),
+            assumedBy: new iam.OpenIdConnectPrincipal(openIdConnectProvider).withConditions({
+                StringLike: podRoleConditions,
+            }),
         });
         
         // MSK 권한 정책
@@ -297,8 +310,8 @@ export class CoreBankInfraStack extends cdk.Stack {
 
         // SSH (22번 포트) 허용
         securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), 'Allow SSH access from anywhere');
-        // SSH (8080번 포트) 허용 - VS Code
-        securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), 'Allow 8080 access from anywhere');
+        // SSH (8080번 포트) 허용 - VS Code (기존에는 실수로 22번을 중복 등록하고 있었다)
+        securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(8080), 'Allow 8080 access from anywhere');
 
         // RDS 접근 허용
         this.rdsClusters.forEach(cluster => {
@@ -321,7 +334,11 @@ export class CoreBankInfraStack extends cdk.Stack {
         //ALB 컨트롤러 설치. VPC태그 및 서브넷 태그 자동 추가.
         const albController = new eks.AlbController(this, 'CoreBankEKSAlbController', {
             cluster: this.eksCluster,
-            version: eks.AlbControllerVersion.V2_8_2, // 원하는 버전 선택
+            // 2.8.2(2024-08)는 너무 오래됐다. modernbank의 Ingress 어노테이션은
+            // 2.17.x에서 모두 유효하며, aws-cdk-lib 2.264.0에 v2.17.1용 IAM 정책이 번들되어 있다.
+            version: eks.AlbControllerVersion.V2_17_1,
+            // CDK 기본값이 us-west-2 레지스트리로 고정되어 있어 배포 리전으로 교정
+            repository: `602401143452.dkr.ecr.${region}.amazonaws.com/amazon/aws-load-balancer-controller`,
           });
 
         // ECR 처리
@@ -342,6 +359,7 @@ export class CoreBankInfraStack extends cdk.Stack {
                 repositoryName: repoName,
                 // 선택적 설정
                 removalPolicy: cdk.RemovalPolicy.DESTROY, // 스택 삭제 시 리포지토리도 삭제
+                emptyOnDelete: true, // 이미지가 남아 있어도 삭제 가능(없으면 스택 삭제가 실패한다)
                 imageScanOnPush: true, // 이미지 푸시 시 취약점 스캔
                 lifecycleRules: [
                     {

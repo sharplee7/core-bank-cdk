@@ -13,15 +13,17 @@
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "22.7.9",
-    "aws-cdk": "2.1005.0",
+    "aws-cdk": "2.1135.1",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "typescript": "~5.6.3"
   },
   "dependencies": {
-    "@aws-cdk/lambda-layer-kubectl-v32": "^2.0.3",
-    "aws-cdk-lib": "2.181.1",
+    "@aws-cdk/lambda-layer-kubectl-v34": "2.2.2",
+    "@workshop-cdk-constructs/ide-vpc": "file:vendor/workshop-cdk-constructs-ide-vpc-0.2.1.tgz",
+    "@workshop-cdk-constructs/vscode-ide": "file:vendor/workshop-cdk-constructs-vscode-ide-0.8.5.tgz",
+    "aws-cdk-lib": "2.264.0",
     "constructs": "^10.0.0"
   }
 }
