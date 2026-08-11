@@ -422,6 +422,12 @@ export class CoreBankInfraStack extends cdk.Stack {
         this.vscodeIde = new VSCodeIde(this, "CoreBankVSCodeIde", {
             vpc: this.vpc,
             instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.XLARGE),
+            // construct 기본값은 4.91.1(VS Code 1.91.1, 2024-07)이다. 그 버전에서는
+            // 아래 extensions 중 3개(kubernetes-tools ^1.110, java-dependency ^1.95,
+            // vmware.vscode-spring-boot ^1.92)가 엔진 요구를 넘어서 2년 전 구버전으로
+            // 폴백 설치되고, redhat.java(최신)와 vscjava 계열의 버전 짝이 어긋난다.
+            // 4.129.0 = VS Code 1.129.0 이라 11개 확장 모두 최신본으로 설치된다.
+            codeServerVersion: '4.129.0',
             bootstrapTimeoutMinutes: 30,
             bootstrapScript: `
                 curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
