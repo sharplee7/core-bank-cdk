@@ -441,8 +441,13 @@ export class CoreBankInfraStack extends cdk.Stack {
 
             //     sudo -u ec2-user bash -c "aws eks update-kubeconfig --name $(aws eks list-clusters --output json | jq -r '.clusters[0]')"
             //     sudo -u ec2-user bash -c "kubectl create namespace modernbank"
-            //     sudo -u ec2-user bash -c "git clone https://github.com/sharplee7/modernbank-demo --branch V2.0-Add-Compensation --single-branch"
-            //     sudo -u ec2-user bash -c "cd modernbank-demo; kubectl apply -f k8s/ingress.yaml"
+            //     sudo -u ec2-user bash -c "git clone https://github.com/AWS-KOREA-COMPOSABLE-ARCH/modernbank-demo.git --single-branch"
+            //     sudo -u ec2-user bash -c "cd modernbank-demo; kubectl apply -f k8s/"
+            // ※ 되살릴 경우 주의:
+            //   - 이전 주소(sharplee7/modernbank-demo)와 브랜치(V2.0-Add-Compensation)는 더 이상 존재하지 않는다.
+            //   - 앱 레포에 k8s/ingress.yaml 파일은 없다(ingress-{account,b2bt,...}.yaml 로 분리됨).
+            //   - 이 스크립트는 IDE 부트스트랩 시점에 실행되므로 kubectl 대상 클러스터가
+            //     아직 준비되지 않았을 수 있다. 클론까지만 하고 배포는 워크숍 스크립트에 맡기는 것이 안전하다.
             // `,
             extensions: [
                 "AmazonWebServices.aws-toolkit-vscode",
