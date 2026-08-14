@@ -12,7 +12,8 @@
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",
-    "cdk": "cdk"
+    "cdk": "cdk",
+    "deploy": "bash scripts/deploy.sh"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

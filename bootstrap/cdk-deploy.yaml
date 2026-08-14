@@ -86,24 +86,13 @@ Resources:
           yum update -y
           yum install -y aws-cfn-bootstrap git
 
-          # === 근본 수정: Node 20 (원본은 setup_16.x 였다) ===
-          curl -sL https://rpm.nodesource.com/setup_20.x | bash -
-          yum install -y nodejs
-
-          echo 'Installed versions:'
-          git --version
-          node --version   # v20.x 여야 한다
-          npm --version
-
+          # Node 설치/버전 보장 로직은 리포의 scripts/deploy.sh 가 소유한다.
+          # (setup_20.x 설치 + node_modules 재설치 + cdk bootstrap + cdk deploy)
           cd /home/ec2-user
           git clone ${RepoUrl}
-          cd core-bank-cdk
-          # vendor/ 의 @workshop-cdk-constructs tgz 를 함께 설치한다
-          npm i
           chown -R ec2-user:ec2-user /home/ec2-user/core-bank-cdk
 
-          npx cdk bootstrap
-          npx cdk deploy --require-approval never
+          bash /home/ec2-user/core-bank-cdk/scripts/deploy.sh
           DEPLOY_RC=$?
 
           /opt/aws/bin/cfn-signal --exit-code $DEPLOY_RC \
