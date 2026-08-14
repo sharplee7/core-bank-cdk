@@ -86,15 +86,24 @@ CoreBankInfraStack의 출력(`IdeUrl`/`IdePassword`)이 code-server 접속 정�
 **근본 수정**: `cdk-deploy` 템플릿 UserData에서 `setup_16.x` → `setup_20.x`(또는 `setup_22.x`)로 변경.
 Node 20으로 고친 참조용 부트스트랩 템플릿을 `bootstrap/cdk-deploy.yaml`에 두었다.
 
-**이미 뜬 EC2를 살려서 즉시 복구**(재시작 없이):
+**주의(Amazon Linux 2 + glibc)**: 부트스트랩 EC2가 Amazon Linux 2(glibc 2.26)이면,
+표준 Node 18/20 바이너리(nodesource RPM·nvm)는 glibc 2.28+ 를 요구해 설치돼도
+`node: /lib64/libc.so.6: version 'GLIBC_2.28' not found` 로 실행조차 안 된다.
+그래서 `scripts/deploy.sh` 는 glibc 를 감지해 2.28 미만이면
+**glibc-217 비공식 빌드**(`unofficial-builds.nodejs.org`)를 `/usr/local` 에 설치한다.
+Amazon Linux 2023(glibc 2.34)에서는 nodesource 표준 패키지를 쓴다.
+
+**이미 뜬 EC2를 살려서 즉시 복구**(재시작 없이) — 리포의 스크립트가 위 분기를 다 처리한다:
 ```
-sudo bash -c 'curl -sL https://rpm.nodesource.com/setup_20.x | bash -'
-sudo yum install -y nodejs
-node -v                      # v20.x 확인
 cd core-bank-cdk             # UserData가 클론한 디렉터리
-rm -rf node_modules package-lock.json && npm i
-npx cdk bootstrap
-npx cdk deploy --require-approval never
+bash scripts/deploy.sh       # Node 20 설치(OS별 분기) + npm i + cdk bootstrap + cdk deploy
+```
+Amazon Linux 2에서 수동으로 하려면 glibc-217 빌드를 직접 받으면 된다:
+```
+curl -fsSL -o /tmp/node20.tar.gz \
+  https://unofficial-builds.nodejs.org/download/release/v20.20.2/node-v20.20.2-linux-x64-glibc-217.tar.gz
+sudo tar -xzf /tmp/node20.tar.gz -C /usr/local --strip-components=1
+export PATH="/usr/local/bin:$PATH"; hash -r; node -v   # v20.x
 ```
 이전 배포가 `ROLLBACK_FAILED`/`ROLLBACK_COMPLETE`로 남아 있으면 먼저 그 스택과
 이름 고정 잔여 리소스를 지워야 `AlreadyExists`로 다시 막히지 않는다.
