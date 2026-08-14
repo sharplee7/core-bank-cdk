@@ -1,6 +1,10 @@
 {
   "name": "core-bank-cdk",
   "version": "0.1.0",
+  "engines": {
+    "//": "aws-cdk-lib 2.264.0과 aws-cdk CLI(2.1135.1)는 Node 20+ 를 요구한다. Node 16/18에서는 CLI 번들 WASM(cdk-from-cfn)이 externref를 못 써서 `npx cdk`가 CompileError로 즉시 죽는다.",
+    "node": ">=20.0.0"
+  },
   "bin": {
     "core-bank-cdk": "bin/core-bank-cdk.js"
   },

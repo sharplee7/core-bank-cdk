@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2009-09-09"
+Description: >-
+  EC2 instance with Git, Node.js 20 and AdministratorAccess that clones the
+  core-bank-cdk repo and runs `cdk bootstrap` + `cdk deploy` (=> CoreBankInfraStack).
+
+# 참조용 재구성 템플릿.
+# EC2 안 /var/log/user-data.log 로그로 확인된 원본 UserData를 기준으로 재작성했고,
+# 실제 배포 실패의 근본 원인이었던 부분을 고쳤다:
+#   1) Node 16(setup_16.x) -> Node 20(setup_20.x)
+#      : aws-cdk CLI 번들 WASM(cdk-from-cfn)이 externref를 써서 Node 16에서는
+#        `CompileError: WebAssembly.Module(): invalid value type 'externref'`로 즉시 죽는다.
+#   2) cfn-init/cfn-signal 이 존재하지 않는 리소스(Vm01)를 참조하던 문제
+#      -> 실제 리소스 논리 ID(DeployerInstance)로 일치시켰다.
+#   3) node16에서 실패하던 `npm install -g npm@latest` 제거(불필요).
+#   4) @workshop-cdk-constructs 는 리포의 vendor/ tgz 를 `npm i`가 설치하므로
+#      별도 wget/tar 다운로드 단계는 제거했다.
+
+Parameters:
+  RepoUrl:
+    Type: String
+    Default: https://github.com/sharplee7/core-bank-cdk
+    Description: 배포할 CDK 리포 URL (14.22 등 픽스가 포함된 브랜치여야 한다)
+  InstanceType:
+    Type: String
+    Default: t3.large
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+  DeployerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # 워크숍 배포 편의를 위한 광범위 권한. 운영 환경에서는 최소 권한으로 좁혀야 한다.
+        - arn:aws:iam::aws:policy/AdministratorAccess
+        # Session Manager 접속용
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  DeployerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref DeployerRole
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: cdk-deploy bootstrap EC2 (egress only; access via SSM Session Manager)
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  DeployerInstance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        # EKS 포함 전체 배포가 끝날 때까지 대기. 필요시 늘린다.
+        Timeout: PT90M
+        Count: 1
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref DeployerInstanceProfile
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -x
+          # -e 는 쓰지 않는다: 중간 명령이 실패해도 마지막에 cfn-signal 로 상태를 반드시 보고하기 위함.
+          exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
+
+          yum update -y
+          yum install -y aws-cfn-bootstrap git
+
+          # === 근본 수정: Node 20 (원본은 setup_16.x 였다) ===
+          curl -sL https://rpm.nodesource.com/setup_20.x | bash -
+          yum install -y nodejs
+
+          echo 'Installed versions:'
+          git --version
+          node --version   # v20.x 여야 한다
+          npm --version
+
+          cd /home/ec2-user
+          git clone ${RepoUrl}
+          cd core-bank-cdk
+          # vendor/ 의 @workshop-cdk-constructs tgz 를 함께 설치한다
+          npm i
+          chown -R ec2-user:ec2-user /home/ec2-user/core-bank-cdk
+
+          npx cdk bootstrap
+          npx cdk deploy --require-approval never
+          DEPLOY_RC=$?
+
+          /opt/aws/bin/cfn-signal --exit-code $DEPLOY_RC \
+            --stack ${AWS::StackName} \
+            --resource DeployerInstance \
+            --region ${AWS::Region}
+
+Outputs:
+  InstanceId:
+    Value: !Ref DeployerInstance
+  SsmConnectHint:
+    Description: Session Manager 로 접속해 로그 확인
+    Value: !Sub "aws ssm start-session --target ${DeployerInstance} --region ${AWS::Region}"

@@ -18,11 +18,19 @@ The `cdk.json` file tells the CDK Toolkit how to execute your app.
 
 ----
 
-# Node.js 및 npm 설치 (Amazon Linux 2023의 기본 패키지 사용)
+# Node.js 20+ 및 npm 설치
+# ※ Node 20 이상이 필수다. aws-cdk-lib 2.264.0 / aws-cdk CLI 2.1135.1은 Node 20+를 요구하고,
+#   Node 16/18에서는 CLI 번들 WASM(cdk-from-cfn)이 `externref`를 못 써서
+#   `npx cdk`가 다음 에러로 즉시 죽는다: `CompileError: WebAssembly.Module(): invalid value type 'externref'`
 ```
-sudo dnf install -y nodejs npm
+# Amazon Linux 2023
+sudo dnf install -y nodejs20 npm   # 또는 nodesource: curl -sL https://rpm.nodesource.com/setup_20.x | sudo bash - && sudo dnf install -y nodejs
 
-node -v  # Node.js 버전 확인
+# Amazon Linux 2 (구형 부트스트랩 EC2)
+curl -sL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo yum install -y nodejs
+
+node -v  # v20 이상인지 확인 (필수)
 npm -v   # npm 버전 확인
 
 sudo npm install -g aws-cdk
@@ -59,6 +67,37 @@ cdk deploy
 이 스택은 이름이 고정된 리소스(IAM 롤 `eksClusterNodeGroupRole`·`modernbank-service-role`, RDS 클러스터 5개,
 MSK 컨피그 `composable-bank-kafka-config`, ECR 리포 7개, EKS OIDC provider)를 만든다.
 이전 배포가 롤백된 상태라면 잔여 리소스를 먼저 지워야 `AlreadyExists`로 실패하지 않는다.
+
+## 부트스트랩 EC2 (`cdk-deploy`)와 Node 버전
+
+워크숍 흐름은 3단계다: 별도 CloudFormation 템플릿 `cdk-deploy`가 **배포용 EC2 한 대**를 띄우고,
+그 EC2의 UserData가 이 리포를 클론해 `cdk bootstrap`(→ `CDKToolkit` 스택)과 `cdk deploy`(→ `CoreBankInfraStack`)를 실행한다.
+CoreBankInfraStack의 출력(`IdeUrl`/`IdePassword`)이 code-server 접속 정보다.
+
+**증상**: `cdk-deploy`만 `CREATE_COMPLETE`로 뜨고 `CDKToolkit`·`CoreBankInfraStack`이 아예 생기지 않는다.
+(`cdk-deploy`의 `CREATE_COMPLETE`는 EC2가 떴다는 뜻일 뿐, 내부 `cdk deploy` 성공을 보장하지 않는다.)
+
+**원인**: 부트스트랩 EC2의 UserData가 **Node 16**(`rpm.nodesource.com/setup_16.x`)을 설치했다.
+`aws-cdk` CLI가 번들한 WASM 모듈(`cdk-from-cfn`)이 `externref`를 쓰는데 Node 16에는 없어서,
+`cdk bootstrap`/`synth`/`deploy`가 로드 즉시 죽는다:
+`CompileError: WebAssembly.Module(): invalid value type 'externref'`.
+확인 위치는 EC2의 `/var/log/user-data.log`.
+
+**근본 수정**: `cdk-deploy` 템플릿 UserData에서 `setup_16.x` → `setup_20.x`(또는 `setup_22.x`)로 변경.
+Node 20으로 고친 참조용 부트스트랩 템플릿을 `bootstrap/cdk-deploy.yaml`에 두었다.
+
+**이미 뜬 EC2를 살려서 즉시 복구**(재시작 없이):
+```
+sudo bash -c 'curl -sL https://rpm.nodesource.com/setup_20.x | bash -'
+sudo yum install -y nodejs
+node -v                      # v20.x 확인
+cd core-bank-cdk             # UserData가 클론한 디렉터리
+rm -rf node_modules package-lock.json && npm i
+npx cdk bootstrap
+npx cdk deploy --require-approval never
+```
+이전 배포가 `ROLLBACK_FAILED`/`ROLLBACK_COMPLETE`로 남아 있으면 먼저 그 스택과
+이름 고정 잔여 리소스를 지워야 `AlreadyExists`로 다시 막히지 않는다.
 
 ## 버전 고정 (2026-08 기준)
 
