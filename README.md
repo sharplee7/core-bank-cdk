@@ -83,8 +83,16 @@ CoreBankInfraStack의 출력(`IdeUrl`/`IdePassword`)이 code-server 접속 정�
 `CompileError: WebAssembly.Module(): invalid value type 'externref'`.
 확인 위치는 EC2의 `/var/log/user-data.log`.
 
-**근본 수정**: `cdk-deploy` 템플릿 UserData에서 `setup_16.x` → `setup_20.x`(또는 `setup_22.x`)로 변경.
-Node 20으로 고친 참조용 부트스트랩 템플릿을 `bootstrap/cdk-deploy.yaml`에 두었다.
+**근본 수정(단일 경로)**: 부트스트랩 EC2의 UserData는 이 리포를 클론한 뒤
+**`bash scripts/deploy.sh` 하나만** 호출한다. 이 스크립트가
+Node 설치 → `npm i` → `cdk bootstrap` → `cdk deploy` 를 전부 처리한다.
+- Node 설치 지점이 이 스크립트 **한 곳뿐**이라 중복 설치가 없다(효율적, 에러 여지 최소화).
+- UserData 는 더 이상 node 를 직접 깔지 않는다(예전 `setup_16.x` 제거).
+- 수동으로 할 때도 `npm install`/`npx cdk` 를 직접 치지 말고 `bash scripts/deploy.sh`(= `npm run deploy`) 를 쓴다.
+
+Node 20 으로 고친 참조용 부트스트랩 템플릿을 `bootstrap/cdk-deploy.yaml`에,
+워크샵 원본 템플릿 수정본을 `composable-architecture-for-fsi-core-system/static/cdk_deploy.yaml`에 반영했다
+(둘 다 `bash scripts/deploy.sh` 를 호출한다).
 
 **주의(Amazon Linux 2 + glibc)**: 부트스트랩 EC2가 Amazon Linux 2(glibc 2.26)이면,
 표준 Node 18/20 바이너리(nodesource RPM·nvm)는 glibc 2.28+ 를 요구해 설치돼도
